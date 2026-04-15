@@ -1,342 +1,286 @@
-import React, { useState, useEffect } from 'react';
-import { Home, User, UserCheck, Edit3, X, Check, Clock, Trash2, Calendar, CheckSquare } from 'lucide-react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInWithCustomToken, 
-  signInAnonymously, 
-  onAuthStateChanged 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  doc, 
-  setDoc, 
-  updateDoc, 
-  onSnapshot, 
-  query, 
-  serverTimestamp 
-} from 'firebase/firestore';
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>팜밸리 리조트 스마트 관리 시스템</title>
+    <!-- 외부 라이브러리 로드 (React, Tailwind, Firebase, Lucide) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+    <script src="https://unpkg.com/lucide@latest" crossorigin></script>
+    
+    <!-- Firebase SDK (Compatibility Mode) -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js" crossorigin></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js" crossorigin></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js" crossorigin></script>
 
-// --- Firebase 초기화 ---
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        body { font-family: 'Pretendard', sans-serif; background-color: #f1f5f9; margin: 0; padding: 0; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        select { appearance: none; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .animate-slide-up { animation: slideUp 0.3s ease-out; }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-export default function App() {
-  const [user, setUser] = useState(null);
-  const [rooms, setRooms] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedRoom, setSelectedRoom] = useState(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
-  const [now, setNow] = useState(new Date());
+    <script type="text/babel">
+        // --- [중요] 사장님의 Firebase 설정값으로 아래를 채워주세요 ---
+        const firebaseConfig = {
+            apiKey: "",
+            authDomain: "",
+            projectId: "",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
+        };
 
-  // 실시간 시계 업데이트
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  // 상태값 정의
-  const STATUS = {
-    vacant: { label: '공실', color: 'bg-white border-dashed border-slate-300 text-slate-500', iconColor: 'text-slate-400' },
-    reserved: { label: '입실예정', color: 'bg-orange-100 border-orange-400 text-orange-800', iconColor: 'text-orange-500' },
-    checkedIn: { label: '입실완료', color: 'bg-teal-100 border-teal-400 text-teal-800', iconColor: 'text-teal-500' },
-    occupied: { label: '재실', color: 'bg-blue-100 border-blue-400 text-blue-800', iconColor: 'text-blue-500' },
-    checkout: { label: '퇴실', color: 'bg-slate-200 border-slate-400 text-slate-800', iconColor: 'text-slate-600' }
-  };
-
-  // 숯 예약 가능 시간 목록 (15:30 ~ 20:00, 30분 단위)
-  const BBQ_TIMES = [
-    "15:30", "16:00", "16:30", "17:00", "17:30",
-    "18:00", "18:30", "19:00", "19:30", "20:00"
-  ];
-
-  // 1. Firebase 인증
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        setErrorMsg("클라우드 연결 실패");
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
-    return () => unsubscribe();
-  }, []);
-
-  // 2. 실시간 데이터 가져오기
-  useEffect(() => {
-    if (!user) return;
-
-    const roomsRef = collection(db, 'artifacts', appId, 'public', 'data', 'hotel_rooms_v9');
-    const q = query(roomsRef);
-
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      if (snapshot.empty) {
-        const initialRooms = [
-          ...Array.from({length: 6}, (_, i) => ({ id: i+1, name: `코코스빌 ${i+1}호`, capacity: 2 })),
-          ...Array.from({length: 6}, (_, i) => ({ id: i+7, name: `까멜빌 ${i+1}호`, capacity: 4 })),
-          ...Array.from({length: 2}, (_, i) => ({ id: i+13, name: `오션빌 ${i+1}호`, capacity: 6 })),
-          ...Array.from({length: 3}, (_, i) => ({ id: i+15, name: `워싱턴빌 ${i+1}호`, capacity: 6 }))
-        ];
+        // Firebase 초기화 로직
+        let auth = null;
+        let db = null;
 
         try {
-          for (const room of initialRooms) {
-            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'hotel_rooms_v9', `room-${room.id}`);
-            await setDoc(docRef, {
-              ...room,
-              status: 'vacant',
-              guestName: '',
-              memo: '',
-              guestCount: room.capacity,
-              isWaterChecked: false, isTowelChecked: false, isTvChecked: false, isLightChecked: false,
-              isBoilerChecked: false, isAcChecked: false, isVentChecked: false, isCutleryChecked: false,
-              isCookingUtensilChecked: false, isTrashBagChecked: false, isHairDryerChecked: false,
-              isMosquitoRepellentChecked: false, isWindowLockedChecked: false, isBeddingChecked: false,
-              isCheckoutBoilerChecked: false, isCheckoutAcChecked: false, isCheckoutDoorChecked: false,
-              hasBBQ: false, bbqTime: '', hasFirePit: false,
-              updatedAt: serverTimestamp()
-            });
-          }
-        } catch (err) { console.error(err); }
-      } else {
-        const fetchedRooms = [];
-        snapshot.forEach(doc => fetchedRooms.push({ docId: doc.id, ...doc.data() }));
-        fetchedRooms.sort((a, b) => a.id - b.id);
-        setRooms(fetchedRooms);
-        setLoading(false);
-      }
-    });
-    return () => unsubscribe();
-  }, [user]);
+            if (firebaseConfig.apiKey && firebase.apps.length === 0) {
+                firebase.initializeApp(firebaseConfig);
+                auth = firebase.auth();
+                db = firebase.firestore();
+            } else if (firebase.apps.length > 0) {
+                auth = firebase.auth();
+                db = firebase.firestore();
+            }
+        } catch (error) {
+            console.error("Firebase 초기화 오류:", error);
+        }
 
-  // 메인 화면 숯/불멍/시간 퀵 업데이트
-  const handleQuickUpdate = async (e, room, field, value) => {
-    e.stopPropagation();
-    if (!user) return;
-    try {
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'hotel_rooms_v9', room.docId);
-      await updateDoc(docRef, { [field]: value, updatedAt: serverTimestamp() });
-    } catch (err) { console.error(err); }
-  };
+        const { useState, useEffect, useRef } = React;
 
-  // 상세 저장
-  const handleUpdateRoom = async (e) => {
-    e.preventDefault();
-    if (!user || !selectedRoom) return;
-    try {
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'hotel_rooms_v9', selectedRoom.docId);
-      const isVacant = selectedRoom.status === 'vacant';
-      
-      const updateData = {
-        ...selectedRoom,
-        guestName: isVacant ? '' : selectedRoom.guestName,
-        guestCount: isVacant ? selectedRoom.capacity : (selectedRoom.guestCount || selectedRoom.capacity),
-        updatedAt: serverTimestamp()
-      };
+        // 전 객실 17개 생성 함수
+        const generateInitialRooms = () => [
+            ...Array.from({length: 6}, (_, i) => ({ id: i+1, name: `코코스빌 ${i+1}호`, capacity: 2 })),
+            ...Array.from({length: 6}, (_, i) => ({ id: i+7, name: `까멜빌 ${i+1}호`, capacity: 4 })),
+            ...Array.from({length: 2}, (_, i) => ({ id: i+13, name: `오션빌 ${i+1}호`, capacity: 6 })),
+            ...Array.from({length: 3}, (_, i) => ({ id: i+15, name: `워싱턴빌 ${i+1}호`, capacity: 6 }))
+        ].map(r => ({
+            docId: `room-${r.id}`,
+            ...r,
+            status: 'vacant',
+            guestName: '',
+            memo: '',
+            guestCount: r.capacity,
+            isWaterChecked: false,
+            isTowelChecked: false,
+            hasBBQ: false,
+            bbqTime: '',
+            hasFirePit: false
+        }));
 
-      if (isVacant) {
-        // 공실로 바꿀 때 메모 제외하고 초기화
-        Object.assign(updateData, {
-          isWaterChecked: false, isTowelChecked: false, isTvChecked: false, isLightChecked: false,
-          isBoilerChecked: false, isAcChecked: false, isVentChecked: false, isCutleryChecked: false,
-          isCookingUtensilChecked: false, isTrashBagChecked: false, isHairDryerChecked: false,
-          isMosquitoRepellentChecked: false, isWindowLockedChecked: false, isBeddingChecked: false,
-          isCheckoutBoilerChecked: false, isCheckoutAcChecked: false, isCheckoutDoorChecked: false,
-          hasBBQ: false, bbqTime: '', hasFirePit: false,
-        });
-      }
+        const Icon = ({ name, size = 16, className = "" }) => {
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        };
 
-      await updateDoc(docRef, updateData);
-      setIsModalOpen(false);
-    } catch (err) { alert("저장 실패"); }
-  };
+        function App() {
+            const [rooms, setRooms] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [selectedRoom, setSelectedRoom] = useState(null);
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [now, setNow] = useState(new Date());
 
-  const getCheckStatus = (room) => {
-    const guestCount = room.guestCount || room.capacity;
-    const needsBedding = guestCount > room.capacity;
-    if (room.status === 'reserved') {
-      const items = [
-        room.isWaterChecked, room.isTowelChecked, room.isTvChecked, room.isLightChecked,
-        room.isBoilerChecked, room.isAcChecked, room.isVentChecked, room.isCutleryChecked,
-        room.isCookingUtensilChecked, room.isTrashBagChecked, room.isHairDryerChecked,
-        room.isMosquitoRepellentChecked, room.isWindowLockedChecked
-      ];
-      if (needsBedding) items.push(room.isBeddingChecked);
-      return items.every(Boolean);
-    } else if (room.status === 'occupied') {
-      const items = [room.isWaterChecked, room.isTowelChecked];
-      if (needsBedding) items.push(room.isBeddingChecked);
-      return items.every(Boolean);
-    } else if (room.status === 'checkout') {
-      return [room.isCheckoutBoilerChecked, room.isCheckoutAcChecked, room.isCheckoutDoorChecked].every(Boolean);
-    }
-    return null;
-  };
+            const STATUS = {
+                vacant: { label: '공실', color: 'bg-white border-dashed border-slate-300 text-slate-500', icon: 'home' },
+                reserved: { label: '입실예정', color: 'bg-orange-100 border-orange-400 text-orange-800', icon: 'clock' },
+                checkedIn: { label: '입실완료', color: 'bg-teal-100 border-teal-400 text-teal-800', icon: 'user-check' },
+                occupied: { label: '재실', color: 'bg-blue-100 border-blue-400 text-blue-800', icon: 'user' },
+                checkout: { label: '퇴실', color: 'bg-slate-200 border-slate-400 text-slate-800', icon: 'check' }
+            };
 
-  if (loading) return <div className="flex h-screen items-center justify-center font-bold">팜밸리 리조트 로딩 중...</div>;
+            const BBQ_TIMES = ["15:30", "16:00", "16:30", "17:00", "17:30", "18:00", "18:30", "19:00", "19:30", "20:00"];
 
-  const stats = rooms.reduce((acc, r) => { acc[r.status]++; return acc; }, { vacant: 0, reserved: 0, checkedIn: 0, occupied: 0, checkout: 0 });
+            useEffect(() => {
+                const timer = setInterval(() => setNow(new Date()), 1000);
+                return () => clearInterval(timer);
+            }, []);
 
-  return (
-    <div className="min-h-screen bg-slate-100 p-4 pb-20 font-sans text-slate-800">
-      <header className="mb-6 flex items-center justify-between rounded-2xl bg-white p-4 shadow-sm">
-        <h1 className="text-xl font-black text-blue-600">팜밸리 스마트 관리</h1>
-        <div className="text-right">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{now.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })}</p>
-          <p className="text-lg font-black font-mono leading-none">{now.toLocaleTimeString('ko-KR', { hour12: false })}</p>
-        </div>
-      </header>
+            useEffect(() => {
+                // Firebase가 설정되지 않은 경우 17개 객실 더미 데이터 표시
+                if (!db || !auth) {
+                    setRooms(generateInitialRooms());
+                    setLoading(false);
+                    return;
+                }
 
-      <div className="mb-6 grid grid-cols-5 gap-1 text-center">
-        {Object.entries(STATUS).map(([key, val]) => (
-          <div key={key} className="rounded-xl bg-white p-2 shadow-sm border border-slate-200">
-            <p className="text-[9px] font-bold text-slate-400">{val.label}</p>
-            <p className="text-sm font-black">{stats[key]}</p>
-          </div>
-        ))}
-      </div>
+                const initData = async () => {
+                    try {
+                        await auth.signInAnonymously();
+                        const unsubscribe = db.collection('hotel_rooms_v9')
+                            .orderBy('id')
+                            .onSnapshot(snapshot => {
+                                if (snapshot.empty) {
+                                    const initial = generateInitialRooms();
+                                    initial.forEach(r => {
+                                        db.collection('hotel_rooms_v9').doc(r.docId).set(r);
+                                    });
+                                } else {
+                                    const list = [];
+                                    snapshot.forEach(doc => list.push({ docId: doc.id, ...doc.data() }));
+                                    setRooms(list);
+                                    setLoading(false);
+                                }
+                            }, err => {
+                                console.error("Snapshot error:", err);
+                                setLoading(false);
+                            });
+                        return unsubscribe;
+                    } catch (err) {
+                        console.error("Auth error:", err);
+                        setLoading(false);
+                    }
+                };
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        {rooms.map(room => {
-          const style = STATUS[room.status] || STATUS.vacant;
-          const complete = getCheckStatus(room);
-          return (
-            <div key={room.docId} onClick={() => { setSelectedRoom({...room}); setIsModalOpen(true); }} className={`flex flex-col rounded-2xl border-2 p-3 shadow-sm transition-all active:scale-95 cursor-pointer ${style.color}`}>
-              <div className="mb-2 flex items-start justify-between">
-                <span className="text-sm font-black tracking-tighter">{room.name}</span>
-                <div className={`rounded-lg bg-white bg-opacity-50 p-1 ${style.iconColor}`}>
-                   {room.status === 'vacant' ? <Home size={14}/> : room.status === 'reserved' ? <Clock size={14}/> : room.status === 'checkedIn' ? <UserCheck size={14}/> : room.status === 'occupied' ? <User size={14}/> : <Check size={14}/>}
+                let unsub;
+                initData().then(fn => unsub = fn);
+                return () => unsub && unsub();
+            }, []);
+
+            const handleQuickUpdate = async (e, room, field, value) => {
+                e.stopPropagation();
+                if (!db) {
+                    setRooms(prev => prev.map(r => r.docId === room.docId ? { ...r, [field]: value } : r));
+                    return;
+                }
+                try {
+                    await db.collection('hotel_rooms_v9').doc(room.docId).update({ [field]: value });
+                } catch (err) { console.error(err); }
+            };
+
+            const handleUpdateRoom = async (e) => {
+                e.preventDefault();
+                const isVacant = selectedRoom.status === 'vacant';
+                const data = { ...selectedRoom };
+                if (isVacant) {
+                    Object.assign(data, { guestName: '', guestCount: selectedRoom.capacity, hasBBQ: false, bbqTime: '', hasFirePit: false, isWaterChecked: false, isTowelChecked: false });
+                }
+
+                if (!db) {
+                    setRooms(prev => prev.map(r => r.docId === selectedRoom.docId ? data : r));
+                    setIsModalOpen(false);
+                    return;
+                }
+
+                try {
+                    await db.collection('hotel_rooms_v9').doc(selectedRoom.docId).set(data);
+                    setIsModalOpen(false);
+                } catch (err) { alert("저장 실패"); }
+            };
+
+            if (loading) return <div className="flex h-screen items-center justify-center font-bold text-slate-400">시스템 연결 중...</div>;
+
+            return (
+                <div className="max-w-md mx-auto min-h-screen pb-24 fade-in">
+                    <header className="bg-white p-5 shadow-sm flex justify-between items-center sticky top-0 z-30">
+                        <h1 className="text-xl font-black text-blue-600">팜밸리 스마트 관리</h1>
+                        <div className="text-right">
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">
+                                {now.toLocaleDateString('ko-KR', {month:'long', day:'numeric', weekday:'short'})}
+                            </p>
+                            <p className="text-lg font-black font-mono leading-none">{now.toLocaleTimeString('ko-KR', {hour12:false})}</p>
+                        </div>
+                    </header>
+
+                    {!firebaseConfig.apiKey && (
+                        <div className="m-4 p-4 bg-amber-50 border border-amber-200 rounded-xl text-[11px] font-bold text-amber-700 leading-relaxed">
+                            💡 현재 <strong>테스트 모드</strong>입니다. (17개 객실 표시 중)<br/>데이터를 실시간 저장하려면 <code>firebaseConfig</code>를 입력해주세요.
+                        </div>
+                    )}
+
+                    <main className="p-4 grid grid-cols-2 gap-3">
+                        {rooms.map(room => {
+                            const style = STATUS[room.status] || STATUS.vacant;
+                            return (
+                                <div key={room.docId} onClick={() => { setSelectedRoom({...room}); setIsModalOpen(true); }} 
+                                     className={`flex flex-col rounded-2xl border-2 p-3 shadow-sm transition-all active:scale-95 cursor-pointer ${style.color}`}>
+                                    <div className="flex justify-between items-start mb-2">
+                                        <span className="text-sm font-black tracking-tighter leading-none pt-1">{room.name}</span>
+                                        <Icon name={style.icon} size={14} className="opacity-40" />
+                                    </div>
+                                    
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-[10px] font-black">{style.label}</span>
+                                        <span className="text-[9px] font-bold opacity-60">
+                                            {['reserved','checkedIn','occupied'].includes(room.status) ? `투숙 ${room.guestCount}명` : `기준 ${room.capacity}인`}
+                                        </span>
+                                    </div>
+
+                                    <div className="flex flex-wrap gap-1 mb-2" onClick={e => e.stopPropagation()}>
+                                        <div className="flex items-center gap-1 bg-white/60 px-1.5 py-1 rounded text-[9px] font-black shadow-sm border border-black/5">
+                                            <input type="checkbox" checked={room.hasBBQ} onChange={e => handleQuickUpdate(e, room, 'hasBBQ', e.target.checked)} className="w-3 h-3" /> 
+                                            <span>숯</span>
+                                        </div>
+                                        {room.hasBBQ && (
+                                            <select value={room.bbqTime} onChange={e => handleQuickUpdate(e, room, 'bbqTime', e.target.value)} className="bg-white/80 rounded px-1 text-[9px] font-black shadow-sm outline-none border-none h-[19px]">
+                                                <option value="">시간</option>
+                                                {BBQ_TIMES.map(t => <option key={t} value={t}>{t}</option>)}
+                                            </select>
+                                        )}
+                                        <div className="flex items-center gap-1 bg-white/60 px-1.5 py-1 rounded text-[9px] font-black shadow-sm border border-black/5">
+                                            <input type="checkbox" checked={room.hasFirePit} onChange={e => handleQuickUpdate(e, room, 'hasFirePit', e.target.checked)} className="w-3 h-3" /> 
+                                            <span>불멍</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="mt-auto flex items-center justify-between pt-1">
+                                        <span className="text-[10px] font-bold truncate max-w-[70%] text-slate-700">{room.guestName || "-"}</span>
+                                        {room.memo && <div className="w-1.5 h-1.5 rounded-full bg-yellow-400 shadow-[0_0_5px_rgba(250,204,21,0.6)]"></div>}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </main>
+
+                    {isModalOpen && selectedRoom && (
+                        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 p-4 backdrop-blur-sm transition-opacity">
+                            <div className="bg-white w-full max-w-sm rounded-t-[2.5rem] flex flex-col max-h-[90vh] shadow-2xl overflow-hidden animate-slide-up">
+                                <div className="p-6 border-b flex justify-between items-center bg-slate-50/50">
+                                    <h2 className="text-xl font-black">{selectedRoom.name}</h2>
+                                    <button onClick={() => setIsModalOpen(false)} className="bg-white border p-2 rounded-xl text-slate-400 shadow-sm"><Icon name="x" size={20}/></button>
+                                </div>
+                                <form onSubmit={handleUpdateRoom} className="p-6 overflow-y-auto space-y-6">
+                                    <section>
+                                        <label className="text-[10px] font-black text-slate-400 uppercase mb-3 block tracking-widest">상태 변경</label>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {Object.entries(STATUS).map(([key, val]) => (
+                                                <button key={key} type="button" onClick={() => setSelectedRoom({...selectedRoom, status: key})} 
+                                                        className={`py-2 text-[11px] font-black rounded-xl border-2 transition-all ${selectedRoom.status === key ? val.color + ' border-current scale-105 shadow-sm' : 'border-slate-100 text-slate-300'}`}>
+                                                    {val.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </section>
+                                    <section className="space-y-4">
+                                        <input type="text" value={selectedRoom.guestName} onChange={e => setSelectedRoom({...selectedRoom, guestName: e.target.value})} placeholder="고객 성함" className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none focus:ring-2 focus:ring-blue-500 transition-all" />
+                                        <textarea value={selectedRoom.memo} onChange={e => setSelectedRoom({...selectedRoom, memo: e.target.value})} placeholder="전달 메모 (작성 시 계속 유지됨)" rows={3} className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl font-bold outline-none resize-none focus:ring-2 focus:ring-blue-500 transition-all" />
+                                    </section>
+                                    <button type="submit" className="w-full bg-slate-900 text-white py-5 rounded-[2.2rem] font-black shadow-lg active:scale-95 transition-all">정보 업데이트</button>
+                                </form>
+                            </div>
+                        </div>
+                    )}
                 </div>
-              </div>
-              
-              <div className="mb-2 flex items-center justify-between">
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] font-black">{style.label}</span>
-                  {complete !== null && <span className={`text-[8px] font-black px-1 rounded-full text-white ${complete ? 'bg-green-500' : 'bg-rose-500'}`}>{complete ? 'OK' : 'Ing'}</span>}
-                </div>
-                <span className="text-[9px] font-bold opacity-60">
-                  {['reserved','checkedIn','occupied'].includes(room.status) ? `${room.guestCount}명` : `${room.capacity}인`}
-                </span>
-              </div>
+            );
+        }
 
-              <div className="mb-3 flex flex-wrap gap-1" onClick={e => e.stopPropagation()}>
-                <label className="flex items-center gap-1 rounded-md bg-white/60 px-1.5 py-1 text-[9px] font-black shadow-sm border border-black/5">
-                  <input type="checkbox" checked={room.hasBBQ} onChange={e => handleQuickUpdate(e, room, 'hasBBQ', e.target.checked)} className="rounded-sm"/> 숯
-                </label>
-                {room.hasBBQ && (
-                  <select value={room.bbqTime} onChange={e => handleQuickUpdate(e, room, 'bbqTime', e.target.value)} className="rounded border-none bg-white/80 text-[9px] font-black shadow-sm">
-                    <option value="">시간</option>
-                    {BBQ_TIMES.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                )}
-                <label className="flex items-center gap-1 rounded-md bg-white/60 px-1.5 py-1 text-[9px] font-black shadow-sm border border-black/5">
-                  <input type="checkbox" checked={room.hasFirePit} onChange={e => handleQuickUpdate(e, room, 'hasFirePit', e.target.checked)} className="rounded-sm"/> 불멍
-                </label>
-              </div>
-
-              <div className="mt-auto flex items-center justify-between">
-                <span className="text-[10px] font-bold truncate max-w-[70%]">{room.guestName || "-"}</span>
-                {room.memo && <div className="h-1.5 w-1.5 rounded-full bg-yellow-400 ring-2 ring-yellow-100"></div>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {isModalOpen && selectedRoom && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 p-4 backdrop-blur-sm sm:items-center">
-          <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-t-[2rem] bg-white shadow-2xl sm:rounded-3xl">
-            <div className="flex items-center justify-between border-b p-6">
-              <h2 className="text-xl font-black">{selectedRoom.name} 관리</h2>
-              <button onClick={() => setIsModalOpen(false)} className="rounded-xl bg-slate-100 p-2 text-slate-400"><X size={20}/></button>
-            </div>
-            
-            <form onSubmit={handleUpdateRoom} className="flex-1 overflow-y-auto p-6 space-y-6">
-              <section>
-                <label className="mb-3 block text-[10px] font-black text-slate-400 uppercase tracking-widest">객실 상태</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {Object.entries(STATUS).map(([key, val]) => (
-                    <button key={key} type="button" onClick={() => setSelectedRoom({...selectedRoom, status: key})} className={`rounded-xl border-2 py-2 text-[11px] font-black transition-all ${selectedRoom.status === key ? val.color + ' border-current' : 'border-slate-100 text-slate-400'}`}>
-                      {val.label}
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              {(selectedRoom.status === 'reserved' || selectedRoom.status === 'occupied') && (
-                <section className={`rounded-2xl p-4 space-y-4 ${selectedRoom.status === 'reserved' ? 'bg-orange-50 border border-orange-100' : 'bg-blue-50 border border-blue-100'}`}>
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-black">비품 및 점검</h3>
-                    <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-lg shadow-sm">
-                      <input type="number" value={selectedRoom.guestCount} onChange={e => setSelectedRoom({...selectedRoom, guestCount: parseInt(e.target.value)||1})} className="w-6 text-center text-xs font-black outline-none"/>
-                      <span className="text-[10px] font-bold">명</span>
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    {[
-                      { id: 'isWaterChecked', label: `생수 ${selectedRoom.guestCount}개` },
-                      { id: 'isTowelChecked', label: `타올 ${selectedRoom.guestCount * 2}장` },
-                      { id: 'isBeddingChecked', label: `침구류 추가 ${selectedRoom.guestCount - selectedRoom.capacity}세트`, show: selectedRoom.guestCount > selectedRoom.capacity }
-                    ].map(item => (!item.hasOwnProperty('show') || item.show) && (
-                      <label key={item.id} className="flex items-center justify-between rounded-xl bg-white p-3 shadow-sm">
-                        <span className="text-xs font-bold">{item.label}</span>
-                        <input type="checkbox" checked={selectedRoom[item.id]} onChange={e => setSelectedRoom({...selectedRoom, [item.id]: e.target.checked})} className="h-5 w-5 rounded border-slate-200"/>
-                      </label>
-                    ))}
-                  </div>
-                  {selectedRoom.status === 'reserved' && (
-                    <div className="grid grid-cols-2 gap-2">
-                      {['isTvChecked', 'isLightChecked', 'isBoilerChecked', 'isAcChecked', 'isVentChecked', 'isCutleryChecked', 'isCookingUtensilChecked', 'isTrashBagChecked', 'isHairDryerChecked', 'isMosquitoRepellentChecked', 'isWindowLockedChecked'].map(id => (
-                        <label key={id} className="flex items-center gap-2 rounded-lg bg-white/60 p-2 border border-white/80">
-                          <input type="checkbox" checked={selectedRoom[id]} onChange={e => setSelectedRoom({...selectedRoom, [id]: e.target.checked})} className="h-3.5 w-3.5 rounded"/>
-                          <span className="text-[10px] font-bold text-slate-600 truncate">{id.replace('is','').replace('Checked','')}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              )}
-
-              {selectedRoom.status === 'checkout' && (
-                <section className="rounded-2xl bg-slate-100 p-4 space-y-3">
-                  <h3 className="text-xs font-black text-slate-500">퇴실 점검</h3>
-                  {['isCheckoutBoilerChecked', 'isCheckoutAcChecked', 'isCheckoutDoorChecked'].map(id => (
-                    <label key={id} className="flex items-center justify-between rounded-xl bg-white p-3 shadow-sm">
-                      <span className="text-xs font-bold">{id.includes('Boiler') ? '보일러 OFF' : id.includes('Ac') ? '에어컨 OFF' : '문단속'}</span>
-                      <input type="checkbox" checked={selectedRoom[id]} onChange={e => setSelectedRoom({...selectedRoom, [id]: e.target.checked})} className="h-5 w-5 rounded border-slate-200"/>
-                    </label>
-                  ))}
-                </section>
-              )}
-
-              <section className="space-y-4">
-                <div>
-                  <label className="mb-2 block text-[10px] font-black text-slate-400 uppercase tracking-widest">고객 성함</label>
-                  <input type="text" value={selectedRoom.guestName} onChange={e => setSelectedRoom({...selectedRoom, guestName: e.target.value})} placeholder="성함 입력" className="w-full rounded-xl bg-slate-50 p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500"/>
-                </div>
-                <div>
-                  <label className="mb-2 block text-[10px] font-black text-slate-400 uppercase tracking-widest">전달 메모</label>
-                  <textarea value={selectedRoom.memo} onChange={e => setSelectedRoom({...selectedRoom, memo: e.target.value})} placeholder="메모 입력 (지우기 전까지 영구 보존)" rows={3} className="w-full rounded-xl bg-slate-50 p-3 text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500 resize-none"/>
-                </div>
-              </section>
-            </form>
-
-            <div className="border-t p-6">
-              <button type="submit" onClick={handleUpdateRoom} className="w-full rounded-2xl bg-slate-900 py-4 text-sm font-black text-white shadow-lg active:scale-95 transition-all">정보 업데이트</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

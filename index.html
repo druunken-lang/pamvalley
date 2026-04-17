@@ -32,7 +32,8 @@
         const { useState, useEffect, useRef } = React;
 
         // --- [중요] 사장님의 Firebase 설정값을 여기에 입력하세요 ---
-        const firebaseConfig = {
+        // (Vercel 배포 시에는 깃허브에 올릴 때 이 값을 채워서 올리셔야 합니다.)
+        const localFirebaseConfig = {
             apiKey: "AIzaSyCuSlWnlJZaweJBxnJkwFosaNLkS4TeFZw",
   authDomain: "pamvalley.firebaseapp.com",
   projectId: "pamvalley",
@@ -42,10 +43,13 @@
   measurementId: "G-0X7WM34SH7"
         };
 
-        // Firebase 초기화 보호 로직
+        // 환경 변수 또는 직접 입력 값 사용
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : localFirebaseConfig;
+
+        // Firebase 초기화 방어 로직
         let auth = null;
         let db = null;
-        const APP_ID = "pamvalley-resort-final";
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'pamvalley-resort-final';
         const isFirebaseConfigured = firebaseConfig.apiKey && firebaseConfig.apiKey !== "";
 
         if (isFirebaseConfigured) {
@@ -109,6 +113,7 @@
                 }));
             };
 
+            // 인증 로직 (RULE 3 준수)
             useEffect(() => {
                 if (!isFirebaseConfigured) {
                     setRooms(generateInitialRooms());
@@ -116,43 +121,52 @@
                     return;
                 }
 
-                // 익명 로그인 실행 (RULE 3)
-                const initAuthAndData = async () => {
+                const initAuth = async () => {
                     try {
-                        await auth.signInAnonymously();
-                        const unsubscribeAuth = auth.onAuthStateChanged(u => setUser(u));
-
-                        const roomsRef = db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('hotel_rooms_v15');
-                        
-                        // orderBy 사용 금지 (RULE 2: 자바스크립트에서 정렬)
-                        const unsubscribeData = roomsRef.onSnapshot(snapshot => {
-                            if (snapshot.empty) {
-                                const initial = generateInitialRooms();
-                                initial.forEach(r => roomsRef.doc(`room-${r.id}`).set(r));
-                            } else {
-                                const list = [];
-                                snapshot.forEach(doc => list.push({ docId: doc.id, ...doc.data() }));
-                                // 자바스크립트에서 ID 순 정렬
-                                list.sort((a, b) => a.id - b.id);
-                                setRooms(list);
-                                setLoading(false);
-                            }
-                        }, err => {
-                            console.error("데이터 동기화 에러:", err);
-                            setErrorMessage("데이터를 가져오는 중 오류가 발생했습니다.");
-                            setLoading(false);
-                        });
-
-                        return () => { unsubscribeAuth(); unsubscribeData(); };
-                    } catch (e) {
-                        console.error("인증 실패:", e);
-                        setErrorMessage("로그인에 실패했습니다. Firebase 설정을 확인해주세요.");
-                        setLoading(false);
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await auth.signInWithCustomToken(__initial_auth_token);
+                        } else {
+                            await auth.signInAnonymously();
+                        }
+                    } catch (err) {
+                        console.error("인증 실패:", err);
+                        setErrorMessage(`로그인 오류: ${err.code} - ${err.message}`);
                     }
                 };
 
-                initAuthAndData();
+                initAuth();
+                const unsubscribe = auth.onAuthStateChanged(u => setUser(u));
+                return () => unsubscribe();
             }, []);
+
+            // 데이터 동기화 로직 (유효한 세션 필수)
+            useEffect(() => {
+                if (!user || !db) return;
+
+                // RULE 1: 정해진 경로 사용
+                const roomsRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('hotel_rooms_v15');
+                
+                // RULE 2: 서버 정렬 대신 클라이언트 정렬
+                const unsubscribe = roomsRef.onSnapshot(snapshot => {
+                    if (snapshot.empty) {
+                        const initial = generateInitialRooms();
+                        initial.forEach(r => roomsRef.doc(`room-${r.id}`).set(r));
+                    } else {
+                        const list = [];
+                        snapshot.forEach(doc => list.push({ docId: doc.id, ...doc.data() }));
+                        list.sort((a, b) => a.id - b.id);
+                        setRooms(list);
+                        setLoading(false);
+                        setErrorMessage(""); // 정상 로드 시 에러 제거
+                    }
+                }, err => {
+                    console.error("데이터 동기화 에러:", err);
+                    setErrorMessage(`데이터를 가져오지 못했습니다: [${err.code}] ${err.message}`);
+                    setLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, [user]);
 
             const getCheckStatus = (room) => {
                 if (room.status === 'vacant') return null;
@@ -179,31 +193,23 @@
 
             const handleQuickUpdate = async (e, room, field, value) => {
                 e.stopPropagation();
-                if (!isFirebaseConfigured || !user) {
-                    setRooms(prev => prev.map(r => (r.docId === room.docId || r.id === room.id) ? {...r, [field]: value} : r));
-                    return;
-                }
+                if (!user) return;
                 try {
-                    await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('hotel_rooms_v15').doc(room.docId).update({ [field]: value });
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('hotel_rooms_v15').doc(room.docId).update({ [field]: value });
                 } catch (err) {
-                    console.error("퀵 업데이트 실패:", err);
+                    console.error("수정 실패:", err);
                 }
             };
 
             const handleSave = async (e) => {
                 e.preventDefault();
-                if (isSaving) return;
+                if (isSaving || !user) return;
                 setIsSaving(true);
-                setErrorMessage("");
 
                 try {
                     const isVacant = selectedRoom.status === 'vacant';
-                    let data = { ...selectedRoom };
+                    let data = { ...selectedRoom, updatedAt: firebase.firestore.FieldValue.serverTimestamp() };
                     
-                    if (isFirebaseConfigured) {
-                        data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
-                    }
-
                     if (isVacant) {
                         Object.assign(data, {
                             guestName: '', guestCount: selectedRoom.capacity, hasBBQ: false, bbqTime: '', hasFirePit: false,
@@ -215,22 +221,17 @@
                         });
                     }
 
-                    if (!isFirebaseConfigured || !user) {
-                        setRooms(prev => prev.map(r => r.id === selectedRoom.id ? data : r));
-                    } else {
-                        // 명시적 가드 (RULE 3)
-                        await db.collection('artifacts').doc(APP_ID).collection('public').doc('data').collection('hotel_rooms_v15').doc(selectedRoom.docId).set(data);
-                    }
+                    await db.collection('artifacts').doc(appId).collection('public').doc('data').collection('hotel_rooms_v15').doc(selectedRoom.docId).set(data);
                     setIsModalOpen(false);
                 } catch (err) {
                     console.error("저장 실패:", err);
-                    setErrorMessage("데이터 저장에 실패했습니다. 권한 설정을 확인하세요.");
+                    setErrorMessage(`저장에 실패했습니다: [${err.code}]`);
                 } finally {
                     setIsSaving(false);
                 }
             };
 
-            if (loading) return (
+            if (loading && !errorMessage) return (
                 <div className="flex h-screen flex-col items-center justify-center bg-white">
                     <div className="w-10 h-10 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-4"></div>
                     <p className="font-black text-slate-400">팜밸리 시스템 연결 중...</p>
@@ -265,11 +266,18 @@
                     </header>
 
                     {errorMessage && (
-                        <div className="m-4 p-4 bg-rose-50 border border-rose-100 rounded-2xl text-xs font-bold text-rose-600 flex items-center gap-2">
-                            <Icon name="alert-circle" size={14} /> {errorMessage}
+                        <div className="m-4 p-4 bg-rose-50 border border-rose-200 rounded-2xl">
+                            <div className="flex items-center gap-2 mb-2 text-rose-700 font-black text-sm">
+                                <Icon name="alert-circle" size={16} /> 오류 발생
+                            </div>
+                            <p className="text-[11px] text-rose-600 font-bold leading-relaxed whitespace-pre-wrap">
+                                {errorMessage}
+                                {"\n\n"}* 해결방법: Firebase 콘솔에서 Firestore를 '테스트 모드'로 활성화했는지, 익명 로그인을 켰는지 확인해 주세요.
+                            </p>
                         </div>
                     )}
 
+                    {/* 객실 그리드 영역 (동일함) */}
                     <main className="p-4 grid grid-cols-2 gap-4">
                         {rooms.map(room => {
                             const style = STATUS[room.status] || STATUS.vacant;
@@ -317,6 +325,7 @@
                         })}
                     </main>
 
+                    {/* 관리 모달 (이전과 동일) */}
                     {isModalOpen && selectedRoom && (
                         <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 p-4 backdrop-blur-sm sm:items-center">
                             <div className="animate-slide-up bg-white w-full max-w-sm rounded-t-[2.5rem] flex flex-col max-h-[92vh] shadow-2xl overflow-hidden sm:rounded-[2.5rem]">
